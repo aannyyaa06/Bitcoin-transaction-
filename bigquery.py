@@ -10,7 +10,7 @@ import os
 # Set up BigQuery client
 # client = bigquery.Client.from_service_account_json("C:\\Users\\ashis\\Downloads\\ferrous-kayak-427014-i0-bf11e05599d8.json")
 # cred_path = os.path.join('..','bitcoin' 'cred', 'cred.json')
-client = bigquery.Client.from_service_account_json("C:\\Users\\ashis\\Desktop\\aanya\\bitcoin\\cred\\cred.json")
+client = bigquery.Client.from_service_account_json("./credentials/cred.json")
 
 SYN_DIST_IN_MIN = 15  # denotes the latest block at time of sync
 
@@ -39,34 +39,48 @@ def check_sync_status(_last_block_timestamp):
         logger.info(f"Sleeping until next run ({wait_time} seconds)")
         time.sleep(wait_time)
 
-def fetch_block_transactions(block_number):
-    # Construct the query
-    min_date = get_utc_date_1_hours_ago()
-    max_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+def get_trx_count(block_number):
     query = f"""
-            SELECT
-  block_hash,
-  block_number,
-  block_timestamp,
-  inputs,
-  outputs
-FROM
-  bigquery-public-data.crypto_bitcoin.transactions
-WHERE
-    block_timestamp_month = DATE_TRUNC(CURRENT_DATE(), MONTH)
-AND block_number between 851132 and 851133
+    SELECT 
+        COUNT(*) AS total_transactions
+    FROM
+      bigquery-public-data.crypto_bitcoin.transactions
+    WHERE
+      block_timestamp_month = DATE_TRUNC(CURRENT_DATE(), MONTH)
+    AND block_number = {block_number};
+  """
+    query_job = client.query(query)
+    results = query_job.result()
+    for row in results:
+        return row.values()[0]
+    return None
+def fetch_block_transactions(block_number, offset=0):
+    # Construct the query
+    # min_date = get_utc_date_1_hours_ago()
+    # max_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    query = f"""
+        SELECT block_hash,
+          block_number,
+          block_timestamp,
+          inputs,
+          outputs
+        FROM
+          bigquery-public-data.crypto_bitcoin.transactions
+        WHERE
+            block_timestamp_month = DATE_TRUNC(CURRENT_DATE(), MONTH)
+        LIMIT 20 OFFSET {offset}"""
 
-    """
     print("Querying :", query)
     # Execute the query
     query_job = client.query(query)
     results = query_job.result()
-    print(results)
+    # print(results)
     # Process and store the extracted data
     all_transactions = []
     for row in results:
         transaction_data = row.values()  # Access transaction data as a tuple
         all_transactions.append(get_bquery_trx(transaction_data))
+        logger.info(all_transactions)
         # print(all_transactions)
 
     return all_transactions
@@ -78,15 +92,20 @@ def insert_bulk_transactions(transactions, table_name):
 # Main script
 while True:
     # last_block_no = get_last_synced_block()
-    last_block_no =851132 
+    last_block_no =852415
 
     try:
         for block_number in range(last_block_no, last_block_no +2):
-            transactions = fetch_block_transactions(block_number)
-            print("Got trxs:", len(transactions))
-            if transactions:
-                insert_bulk_bitcoin_transactions(block_number,transactions)
-                print(f'Inserted transactions for block {block_number} successfully')
+            total_trx_count = get_trx_count(block_number)
+            print(total_trx_count)
+            print(type(total_trx_count))
+            offset = 0
+            while offset < total_trx_count:
+                transactions = fetch_block_transactions(block_number, offset)
+                offset = offset+20
+                if transactions:
+                    print(transactions)
+                    insert_bulk_bitcoin_transactions(block_number,transactions)
+                    print(f'Inserted transactions for block {block_number} successfully')
     except Exception as e:
         logger.exception(e)
-    
